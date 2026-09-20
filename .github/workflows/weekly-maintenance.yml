@@ -1,0 +1,63 @@
+name: Weekly Global Feed Assets Maintenance
+
+on:
+  schedule:
+    # Synchronize the global feed assets every Sunday at 10:00 UTC.
+    - cron: '0 10 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-assets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Synchronize assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          assets = {
+              "feed/rss.xslt": "https://feeds.acast.com/global/feed/rss.xslt",
+              "feed/styles.css": "https://feeds.acast.com/global/feed/styles.css",
+          }
+
+          for destination, source in assets.items():
+              target = Path(destination)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              request = Request(source, headers={"User-Agent": "global-feed-maintenance/1.0"})
+              with urlopen(request, timeout=30) as response:
+                  remote_content = response.read()
+
+              local_content = target.read_bytes() if target.exists() else None
+              if local_content == remote_content:
+                  print(f"{destination}: already up to date")
+                  continue
+
+              target.write_bytes(remote_content)
+              print(f"{destination}: synchronized from {source}")
+          PY
+
+      - name: Check for changes and commit
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Changes detected, committing and pushing..."
+            git config --local user.name "github-actions[bot]"
+            git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add feed/rss.xslt feed/styles.css
+            git commit -m "chore(feed): sync global assets [skip ci]"
+            git push
+          else
+            echo "No changes detected. Global assets are up to date."
+          fi
