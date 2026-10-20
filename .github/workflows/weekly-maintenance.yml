@@ -8,46 +8,33 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   sync-assets:
     runs-on: ubuntu-latest
 
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.14'
-
       - name: Synchronize assets
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          from urllib.request import Request, urlopen
-
-          assets = {
-              "feed/rss.xslt": "https://feeds.acast.com/global/feed/rss.xslt",
-              "feed/styles.css": "https://feeds.acast.com/global/feed/styles.css",
-          }
-
-          for destination, source in assets.items():
-              target = Path(destination)
-              target.parent.mkdir(parents=True, exist_ok=True)
-              request = Request(source, headers={"User-Agent": "global-feed-maintenance/1.0"})
-              with urlopen(request, timeout=30) as response:
-                  remote_content = response.read()
-
-              local_content = target.read_bytes() if target.exists() else None
-              if local_content == remote_content:
-                  print(f"{destination}: already up to date")
-                  continue
-
-              target.write_bytes(remote_content)
-              print(f"{destination}: synchronized from {source}")
-          PY
+          curl -fsSL --retry 3 --create-dirs \
+            -A "global-feed-maintenance/1.0" \
+            -o feed/rss.xslt https://feeds.acast.com/global/feed/rss.xslt
+          curl -fsSL --retry 3 --create-dirs \
+            -A "global-feed-maintenance/1.0" \
+            -o feed/styles.css https://feeds.acast.com/global/feed/styles.css
 
       - name: Check for changes and commit
         run: |
@@ -56,8 +43,24 @@ jobs:
             git config --local user.name "github-actions[bot]"
             git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add feed/rss.xslt feed/styles.css
-            git commit -m "chore(feed): sync global assets [skip ci]"
+            git commit -m "chore(feed): sync global assets"
             git push
           else
             echo "No changes detected. Global assets are up to date."
           fi
+
+      - name: Stage published files
+        run: |
+          mkdir -p _site/feed
+          rsync -a feed/ _site/feed/
+          echo "Published content:"
+          ls -la _site/feed
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
